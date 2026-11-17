@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+recordings/*
+!recordings/.gitkeep
+datasets/*
+!datasets/.gitkeep
+*.sqlite3
+config.local.toml
+state.json

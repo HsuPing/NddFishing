@@ -1,0 +1,18 @@
+# Runtime dependencies (mirror of pyproject.toml). Verified on macOS 27.2 / arm64 / Python 3.13.
+numpy>=2.0
+scipy>=1.13
+opencv-python-headless>=4.10
+PySide6-Essentials>=6.7
+sounddevice>=0.5
+psutil>=6.0
+pyobjc-core>=10.3; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.3; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.3; sys_platform == "darwin"
+pyobjc-framework-CoreMedia>=10.3; sys_platform == "darwin"
+pyobjc-framework-ScreenCaptureKit>=10.3; sys_platform == "darwin"
+pyobjc-framework-libdispatch>=10.3; sys_platform == "darwin"
+
+# Development
+pytest>=8.0
+ruff>=0.6
+mypy>=1.11

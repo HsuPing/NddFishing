@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wowfishing"
+version = "0.1.0"
+description = "WoW fishing research: bobber vision, audio event recognition, simulated state machine (observation only)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    # headless: the UI is PySide6, so OpenCV's own GUI backend is not wanted.
+    "opencv-python-headless>=4.10",
+    "PySide6-Essentials>=6.7",
+    "sounddevice>=0.5",
+    "psutil>=6.0",
+    "pyobjc-core>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-ScreenCaptureKit>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-libdispatch>=10.3; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+wowfishing = "wowfishing.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wowfishing"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["capture: needs macOS screen recording permission and a real display"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # CJK punctuation in strings/comments is intentional
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = [
+    "cv2.*", "sounddevice.*", "psutil.*", "scipy.*",
+    "objc.*", "dispatch.*", "Quartz.*", "ScreenCaptureKit.*", "CoreMedia.*", "Foundation.*", "AppKit.*",
+]
+ignore_missing_imports = true
