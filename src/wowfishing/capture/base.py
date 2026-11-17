@@ -12,7 +12,7 @@ Contract (applies to both protocols)
 * ``on_error`` reports a failure after a successful ``start``. The source has
   stopped delivering by then; the owner must still call ``stop`` to release it.
 * ``on_end`` is called once when a finite source (replay) runs out. Live sources
-  never call it.
+  never call it. As after an error, the owner must still call ``stop``.
 * ``stop`` is idempotent and may be called from any thread. Once it returns, no
   further callbacks arrive.
 * No method of a source may be called from inside one of its own callbacks

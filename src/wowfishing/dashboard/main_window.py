@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 import psutil
 from PySide6.QtCore import Qt, QTimer
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from wowfishing.capture.base import CaptureError
+from wowfishing.capture.recorder import FrameRecorder
 from wowfishing.capture.targets import CaptureTarget, choose_target
 from wowfishing.config.settings import Settings
 from wowfishing.config.state import load_roi, save_roi
@@ -34,6 +37,7 @@ log = logging.getLogger(__name__)
 
 _DISPLAY_INTERVAL_MS = 15
 _STATS_INTERVAL_MS = 1000
+_SAVING_POLL_MS = 100
 
 STYLE = """
 QWidget { background: #1c1c1f; color: #dcdce0; font-size: 13px; }
@@ -49,6 +53,24 @@ QComboBox, QSpinBox { background: #26262b; border: 1px solid #44444c; border-rad
 QLabel#value { font-family: Menlo; color: #f0f0f4; }
 QLabel#error { color: #ff7b72; }
 """
+
+
+def new_session_dir(recordings_dir: Path) -> Path:
+    """A not-yet-existing ``<recordings>/<date>-<time>[-n]`` path."""
+    base = recordings_dir / datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate, suffix = base, 2
+    while candidate.exists():
+        candidate = base.with_name(f"{base.name}-{suffix}")
+        suffix += 1
+    return candidate
+
+
+def free_gigabytes(path: Path) -> float:
+    """Free space on the volume holding ``path``; 0.0 if it cannot be determined."""
+    try:
+        return shutil.disk_usage(path).free / 1e9
+    except OSError:
+        return 0.0
 
 
 def format_roi(roi: Roi) -> str:
@@ -70,6 +92,9 @@ class MainWindow(QMainWindow):
         self._process.cpu_percent(None)  # prime: the first call always returns 0
 
         self._controller = CaptureController(source_factory, self)
+        self._saving: FrameRecorder | None = None  # recording still flushing to disk
+        self._saving_timer = QTimer(self)
+        self._saving_timer.timeout.connect(self._check_saving)
         # Always queued: the handler stops the source, which must never happen
         # inside the source's own error callback.
         self._controller.failed.connect(self._on_capture_failed, Qt.ConnectionType.QueuedConnection)
@@ -238,29 +263,48 @@ class MainWindow(QMainWindow):
             self._finish_recording()
             return
         target: CaptureTarget | None = self.target_box.currentData()
-        session = self._settings.paths.recordings_dir / datetime.now().strftime("%Y%m%d-%H%M%S")
         meta = {"target": target.label if target else "", "fps": self.fps_box.value()}
         try:
+            session = new_session_dir(self._settings.paths.recordings_dir)
             self._controller.start_recording(session, meta)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self.record_button.setChecked(False)
             self._show_error(f"無法開始錄製：{exc}")
             return
+        self._show_error("")
         self.record_button.setText("停止錄製")
         self.record_label.setText("錄製中…")
 
     def _finish_recording(self) -> None:
-        recorder = self._controller.stop_recording()
+        """Stop feeding the recorder; it flushes in the background and is polled."""
+        recorder = self._controller.detach_recorder()
         self.record_button.setChecked(False)
-        self.record_button.setText("開始錄製")
         if recorder is None:
             return
+        self._saving = recorder
+        self.record_button.setText("儲存中…")
+        self._saving_timer.start(_SAVING_POLL_MS)
+        self._check_saving()
+        self._update_controls()
+
+    def _check_saving(self) -> None:
+        recorder = self._saving
+        if recorder is None:
+            self._saving_timer.stop()
+            return
+        if not recorder.finished:
+            self.record_label.setText(f"儲存中… 剩 {recorder.pending} 張")
+            return
+        self._saving = None
+        self._saving_timer.stop()
+        self.record_button.setText("開始錄製")
         summary = f"已存 {recorder.written} 張"
         if recorder.dropped:
-            summary += f"（磁碟來不及，略過 {recorder.dropped} 張）"
-        self.record_label.setText(f"{summary}\n{recorder.session_dir}")
+            summary += f"（略過 {recorder.dropped} 張）"
         if recorder.error is not None:
-            self._show_error(f"錄製中斷：{recorder.error}")
+            summary += f"\n錄製中斷：{recorder.error}"
+        self.record_label.setText(f"{summary}\n{recorder.session_dir.resolve()}")
+        self._update_controls()
 
     def _on_capture_failed(self, message: str) -> None:
         self._stop()
@@ -303,7 +347,8 @@ class MainWindow(QMainWindow):
                 self._finish_recording()
             else:
                 self.record_label.setText(
-                    f"錄製中… {recorder.written} 張（略過 {recorder.dropped}）"
+                    f"錄製中… {recorder.written} 張（略過 {recorder.dropped}）\n"
+                    f"磁碟剩餘 {free_gigabytes(recorder.session_dir):.1f} GB"
                 )
         if not self._controller.running:
             for label in (self.fps_label, self.latency_label, self.size_label, self.dropped_label):
@@ -326,7 +371,7 @@ class MainWindow(QMainWindow):
         self.fps_box.setEnabled(not running)
         self.refresh_button.setEnabled(not running)
         self.select_roi_button.setEnabled(running)
-        self.record_button.setEnabled(running)
+        self.record_button.setEnabled(running and self._saving is None)
         self.reset_roi_button.setEnabled(self._roi != Roi.full())
         self.roi_label.setText(format_roi(self._roi))
 
@@ -336,5 +381,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._display_timer.stop()
         self._stats_timer.stop()
-        self._controller.stop()
+        self._saving_timer.stop()
+        self._controller.stop()  # blocks until an active recording is on disk
+        if self._saving is not None:
+            self._saving.stop()  # likewise for one that was already finishing
+            self._saving = None
         super().closeEvent(event)

@@ -80,17 +80,27 @@ class CaptureController(QObject):
         return self._recorder
 
     def start_recording(self, session_dir: Path, meta: dict[str, Any]) -> None:
-        """Record every delivered frame into ``session_dir``. Raises ``OSError``."""
+        """Record every delivered frame into ``session_dir``. Raises ``OSError``/``ValueError``."""
         self.stop_recording()
         recorder = FrameRecorder(session_dir)
         recorder.start(meta)
         self._recorder = recorder
 
     def stop_recording(self) -> FrameRecorder | None:
-        """Flush and close the recording; returns it so the caller can report totals."""
-        recorder, self._recorder = self._recorder, None
+        """Flush and close the recording, blocking until it is on disk (shutdown path)."""
+        recorder = self.detach_recorder()
         if recorder is not None:
             recorder.stop()
+        return recorder
+
+    def detach_recorder(self) -> FrameRecorder | None:
+        """Stop feeding the recorder and let it finish in the background; never blocks.
+
+        The caller watches ``recorder.finished`` and reports the totals afterwards.
+        """
+        recorder, self._recorder = self._recorder, None
+        if recorder is not None:
+            recorder.request_stop()
         return recorder
 
     # --- capture thread -------------------------------------------------------

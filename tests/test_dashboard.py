@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,14 @@ def make_frame(roi: Roi | None = None, index: int = 0) -> Frame:
     image = np.zeros((100, 200, 3), np.uint8)
     image[..., 2] = 200  # red in BGR
     return Frame(image=image, timestamp=time.monotonic(), index=index, roi=roi or Roi.full())
+
+
+def wait_until(condition: Callable[[], bool], timeout_ms: int = 3000) -> None:
+    """Run the Qt event loop until ``condition`` holds."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while not condition():
+        assert time.monotonic() < deadline, "condition not reached"
+        QTest.qWait(20)
 
 
 class FakeSource:
@@ -331,8 +340,11 @@ def test_recording_saves_delivered_frames_and_stops_with_capture(
         h.source.emit(1)
         h.source.emit(2)
         w.stop_button.click()  # stopping capture also finishes the recording
-        assert w.record_button.text() == "開始錄製" and not w.record_button.isChecked()
+        assert not w.record_button.isChecked()
+        wait_until(lambda: w._saving is None)  # flushed in the background, not on the click
+        assert w.record_button.text() == "開始錄製"
         assert "已存 2 張" in w.record_label.text()
+        assert str((tmp_path / "recordings").resolve()) in w.record_label.text()
         sessions = list((tmp_path / "recordings").iterdir())
         assert len(sessions) == 1
         assert [f.index for f in iter_frames(sessions[0])] == [1, 2]
@@ -349,5 +361,100 @@ def test_recording_failure_to_start_is_shown(qapp: object, tmp_path: Path) -> No
         w.record_button.click()
         assert "無法開始錄製" in w.error_label.text()
         assert not w.record_button.isChecked() and w._controller.recorder is None
+    finally:
+        w.close()
+
+
+def test_stopping_a_recording_does_not_block_the_ui_on_a_slow_disk(
+    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from wowfishing.capture.recorder import FrameRecorder
+
+    gate = threading.Event()
+    original = FrameRecorder._write_frame
+
+    def slow(self: FrameRecorder, frame: Frame, index: object) -> None:
+        gate.wait(5.0)
+        original(self, frame, index)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FrameRecorder, "_write_frame", slow)
+    h = Harness(tmp_path)
+    w = h.window
+    try:
+        w.start_button.click()
+        w.record_button.click()
+        for i in range(5):
+            h.source.emit(i)
+        started = time.monotonic()
+        w.record_button.click()  # stop recording while the "disk" is stalled
+        assert time.monotonic() - started < 0.5
+        assert w.record_button.text() == "儲存中…" and not w.record_button.isEnabled()
+        assert "儲存中" in w.record_label.text()
+        gate.set()
+        wait_until(lambda: w._saving is None)
+        assert "已存 5 張" in w.record_label.text()
+        assert w.record_button.isEnabled() and w.record_button.text() == "開始錄製"
+    finally:
+        gate.set()
+        w.close()
+
+
+def test_closing_the_window_while_recording_saves_everything(qapp: object, tmp_path: Path) -> None:
+    from wowfishing.capture.replay import iter_frames
+
+    h = Harness(tmp_path)
+    w = h.window
+    w.start_button.click()
+    w.record_button.click()
+    for i in range(3):
+        h.source.emit(i)
+    w.close()
+    (session,) = (tmp_path / "recordings").iterdir()
+    assert [f.index for f in iter_frames(session)] == [0, 1, 2]
+    import json
+
+    assert json.loads((session / "meta.json").read_text(encoding="utf-8"))["state"] == "complete"
+
+
+def test_two_recordings_in_the_same_second_get_distinct_sessions(
+    qapp: object, tmp_path: Path
+) -> None:
+    h = Harness(tmp_path)
+    w = h.window
+    try:
+        w.start_button.click()
+        for _ in range(2):
+            w.record_button.click()
+            h.source.emit()
+            w.record_button.click()
+            wait_until(lambda: w._saving is None)
+            assert w.error_label.text() == ""
+        assert len(list((tmp_path / "recordings").iterdir())) == 2
+    finally:
+        w.close()
+
+
+def test_recorder_failure_is_surfaced_and_capture_keeps_running(
+    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wowfishing.capture.recorder import FrameRecorder
+
+    def broken(self: FrameRecorder, frame: Frame, index: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(FrameRecorder, "_write_frame", broken)
+    h = Harness(tmp_path)
+    w = h.window
+    try:
+        w.start_button.click()
+        w.record_button.click()
+        h.source.emit()
+        wait_until(lambda: (r := w._controller.recorder) is not None and r.error is not None)
+        w._update_stats()  # the periodic read-out notices the failure
+        wait_until(lambda: w._saving is None)
+        assert "錄製中斷" in w.record_label.text() and "disk full" in w.record_label.text()
+        assert w._controller.running and w.stop_button.isEnabled()
     finally:
         w.close()
