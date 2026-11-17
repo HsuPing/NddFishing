@@ -6,6 +6,7 @@ Without options it opens the monitoring dashboard; ``--check`` runs diagnostics 
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 from pathlib import Path
 
@@ -66,7 +67,14 @@ def run_dashboard(settings: Settings) -> int:
     app = QApplication([])
     window = MainWindow(settings, list_targets, make_source)
     window.show()
-    return app.exec()
+    code = app.exec()
+    # Destroy the window while the application object still exists. Left to
+    # interpreter shutdown, PySide tears widgets down in arbitrary order and the
+    # process can segfault on exit (seen about every other run).
+    window.close()
+    del window
+    gc.collect()  # signal connections to bound methods/lambdas form reference cycles
+    return code
 
 
 if __name__ == "__main__":

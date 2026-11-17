@@ -458,3 +458,20 @@ def test_recorder_failure_is_surfaced_and_capture_keeps_running(
         assert w._controller.running and w.stop_button.isEnabled()
     finally:
         w.close()
+
+
+def test_no_widget_is_owned_by_both_python_and_qt(qapp: object, tmp_path: Path) -> None:
+    """Regression: double ownership made the process segfault at exit about every other run."""
+    import shiboken6
+    from PySide6.QtWidgets import QWidget
+
+    h = Harness(tmp_path)
+    try:
+        doubly_owned = [
+            f"{type(child).__name__}({getattr(child, 'text', lambda: '')()!r})"
+            for child in h.window.findChildren(QWidget)
+            if child.parent() is not None and shiboken6.ownedByPython(child)
+        ]
+        assert doubly_owned == []
+    finally:
+        h.window.close()

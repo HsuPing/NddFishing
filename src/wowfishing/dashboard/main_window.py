@@ -73,6 +73,19 @@ def free_gigabytes(path: Path) -> float:
         return 0.0
 
 
+def add_row(parent_layout: QVBoxLayout, *widgets: QWidget) -> None:
+    """Add ``widgets`` side by side as one row of ``parent_layout``.
+
+    The row is attached to its parent *before* the widgets go in. A widget added
+    to a layout that has no parent yet stays owned by Python even after Qt gives
+    it a C++ parent; both then try to delete it and the process segfaults at exit.
+    """
+    row = QHBoxLayout()
+    parent_layout.addLayout(row)
+    for widget in widgets:
+        row.addWidget(widget)
+
+
 def format_roi(roi: Roi) -> str:
     return f"x {roi.x:.3f}  y {roi.y:.3f}\nw {roi.width:.3f}  h {roi.height:.3f}"
 
@@ -133,14 +146,8 @@ class MainWindow(QMainWindow):
         source_group = QGroupBox("擷取來源")
         source_layout = QVBoxLayout(source_group)
         source_layout.addWidget(self.target_box)
-        row = QHBoxLayout()
-        row.addWidget(self.fps_box)
-        row.addWidget(self.refresh_button)
-        source_layout.addLayout(row)
-        row = QHBoxLayout()
-        row.addWidget(self.start_button)
-        row.addWidget(self.stop_button)
-        source_layout.addLayout(row)
+        add_row(source_layout, self.fps_box, self.refresh_button)
+        add_row(source_layout, self.start_button, self.stop_button)
 
         self.select_roi_button = QPushButton("框選 ROI")
         self.select_roi_button.setCheckable(True)
@@ -151,10 +158,7 @@ class MainWindow(QMainWindow):
 
         roi_group = QGroupBox("ROI")
         roi_layout = QVBoxLayout(roi_group)
-        row = QHBoxLayout()
-        row.addWidget(self.select_roi_button)
-        row.addWidget(self.reset_roi_button)
-        roi_layout.addLayout(row)
+        add_row(roi_layout, self.select_roi_button, self.reset_roi_button)
         roi_layout.addWidget(self.roi_label)
 
         self.record_button = QPushButton("開始錄製")
@@ -184,22 +188,20 @@ class MainWindow(QMainWindow):
         self.error_label.setObjectName("error")
         self.error_label.setWordWrap(True)
 
-        side = QVBoxLayout()
+        side_widget = QWidget()
+        side_widget.setFixedWidth(280)
+        side = QVBoxLayout(side_widget)
         side.addWidget(source_group)
         side.addWidget(roi_group)
         side.addWidget(record_group)
         side.addWidget(stats_group)
         side.addWidget(self.error_label)
         side.addStretch(1)
-        side_widget = QWidget()
-        side_widget.setLayout(side)
-        side_widget.setFixedWidth(280)
 
-        layout = QHBoxLayout()
+        central = QWidget()
+        layout = QHBoxLayout(central)
         layout.addWidget(self.video, 1)
         layout.addWidget(side_widget)
-        central = QWidget()
-        central.setLayout(layout)
         self.setCentralWidget(central)
         self.resize(1180, 680)
 
